@@ -1,0 +1,4 @@
+
+
+
+class FitgError(Exception): pass
