@@ -1,0 +1,36 @@
+
+## NEXT
+
+- [ ] implement p2y
+- [ ] implement yp2
+- [ ] implement dcf (inc 30E360)
+- [ ] populate and read bonds.csv
+- [ ] populate and read bond_futs.csv
+- [ ] determine basket
+
+- Agents
+  - GameMaster
+    - track trades
+    - accure interest
+    - enforce limits
+  - Exchange
+    - show prices
+    - accept & fill orders
+  - BondVenue
+    - show prices
+    - RFQ process
+    - allow dealers to find other dealers
+  - SimpleDealer
+    - respond to RFQs
+    - hedge with futures
+  - SimpleExchangeMarketMaker
+    - make markets
+  - SimpleLiquidityTaker
+    - Initiate RFQs
+
+- Components
+  - FIFO p/l
+  - cash account
+  - balance sheet calc
+  - risk calc (total DV01 is fine for now)
+
