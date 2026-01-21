@@ -11,11 +11,12 @@
 
 # vlmessaging imports
 from vlmessaging import VLM, Msg, Entry
-from vlmessaging.utils import co, Missing, wip
+from vlmessaging.utils import co, Missing, wip, logging
 
 # local imports
 from fitg.agents._game_agent_base import GameAgent
 
+_log = logging.getLogger(__name__)
 
 
 class SimpleBondDealer(GameAgent):
@@ -36,13 +37,13 @@ class SimpleBondDealer(GameAgent):
         await self.loginToGameMaster()
         await self.registerSelfWithDirectory(vnets, self.name)
         self.running = True
+        f'SimpleBondDealer {self.name} started' >> _log.info
         return self
 
     async def stop(self):
         await super().stop()
         self._conn.unscheduleFn(self.ensureConnectedAndSendQuotes)
         self.running = False
-
 
     async def msgArrived(self, msg):
 

@@ -22,11 +22,20 @@ class BondVenue(GameAgent):
     ENTRY_TYPE = 'BondVenue'
     REGISTER_PROVIDER = 'REGISTER_PROVIDER'
     UNREGISTER_PROVIDER = 'UNREGISTER_PROVIDER'
+    PROVIDER_JOINED = 'PROVIDER_JOINED'
+    PROVIDER_LEFT = 'PROVIDER_LEFT'
     REGISTER_TAKER = 'REGISTER_TAKER'
     UNREGISTER_TAKER = 'UNREGISTER_TAKER'
-    GET_QUOTES = 'GET_QUOTES'
-    SUBMIT_QUOTES = 'SUBMIT_QUOTES'
-    INITIATE_RFQ = 'INITIATE_RFQ'
+    GET_INDICATIVE = 'GET_INDICATIVE'   # anyone can get current indicative prices
+    SUBMIT_QUOTES = 'SUBMIT_QUOTES'     # provider must submit these every minute
+    NEW_RFQ = 'NEW_RFQ'                 # taker initiates this
+    QUOTES_FOR_RFQ = 'QUOTES_FOR_RFQ'   # inform taker of levels
+    ACCEPT_QUOTES = 'ACCEPT_QUOTES'     # taker trades with best quote
+    DECLINE_QUOTES = 'DECLINE_QUOTES'   # taker declines to trade
+    RFQ = 'RFQ'                         # venue asking provider for quote
+    RFQ_ACCEPTED = 'RFQ_ACCEPTED'       # venue informs provider they traded
+    RFQ_MISSED_NEXT = 'RFQ_MISSED_NEXT' # venue informs provider they missed but were next best
+    RFQ_MISSED = 'RFQ_MISSED'           # venue informs provider they missed
 
     __slots__ = [
         'addrByProviderName', 'addrByTakerName', 'assets', 'baByProviderByAsset'

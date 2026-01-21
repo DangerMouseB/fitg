@@ -79,5 +79,5 @@ def main():
 if __name__ == '__main__':
     sink = logging.StreamSink(sys.stdout, formatter=logging.Formatter('%(message)s'))
     logging.getLogger('fitb') >> sink
-    with logging.configure(levels={'*':logging.INFO}):
+    with logging.configure(levels={'fitb.*':logging.INFO}):
         main()

@@ -11,21 +11,27 @@
 
 # vlmessaging imports
 from vlmessaging import VLM, Msg, Entry
-from vlmessaging.utils import co, Missing, wip
+from vlmessaging.utils import co, Missing, wip, logging
+from vlmessaging._utils import directory
 
 # local imports
 from fitg.agents._game_agent_base import GameAgent
+from fitg.agents.bond_venue import BondVenue
 
+
+_log = logging.getLogger(__name__)
 
 
 class SimpleBondLiquidityTaker(GameAgent):
     ENTRY_TYPE = 'SimpleLiquidityTaker'
 
-    __slots__ = ('addrByMarketMakerName', 'bondVenues', 'futExchanges')
+    __slots__ = ('addrByMarketMakerName', 'bondVenuesByName', 'futExchanges')
 
     def __init__(self, router, *, bondVenues, futExchanges, **kwargs):
         super().__init__(router, **kwargs)
-        self.bondVenues = bondVenues
+        self.bondVenuesByName = {}
+        for name in bondVenues:
+            self.bondVenuesByName[name] = Missing
         self.futExchanges = futExchanges
 
     async def start(self, vnets=[]):
@@ -40,10 +46,39 @@ class SimpleBondLiquidityTaker(GameAgent):
         self.running = False
 
     async def msgArrived(self, msg):
+        if msg.subject == BondVenue.NEW_TRADES:
+            print(f'got new trades: {msg.contents}')
+            return
+
         return [VLM.HANDLE_DOES_NOT_UNDERSTAND]
 
     async def maybeInitiateRfq(self):
         print('maybeInitiateRfq')
+
+        # try to find missing venues
+        missingVenues = [name for name, addr in self.bondVenuesByName.items() if addr is Missing]
+        if missingVenues:
+            entries:list[Entry] = directory._findEntriesOfTypeOrExit(
+                self.conn,
+                BondVenue.ENTRY_TYPE,
+                timeout=200,
+                errMsg=Missing
+            )
+            for entry in entries:
+                if (name:=entry.params['name']) in missingVenues:
+                    _log.info(f'found venue {name} at {entry.addr}')
+                    self.bondVenuesByName[name] = entry.addr
+                    # register as liquidity taker
+
+        # for each bondVenue
+        # get bonds and prices
+        # select random bond & size
+        # get liquidity providers
+        # send RFQ to venue with list of N providers (N is smaller the larger the size is)
+        # wait for responses from providers within time limit
+        # tell venue if done trade and note who traded with and for what size
+        # preferred providers list are cheapest for size
+
         self.conn.scheduleFn(self.maybeInitiateRfq, after=500)
 
 
