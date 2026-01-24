@@ -12,21 +12,27 @@
 #        provider - the party providing quotes
 #        asset - the bond being quoted
 #        size - the quantity being quoted (+ve for buy, -ve for sell)
-#        indicative price - a non-binding price provided by a provider to show current market levels, but expectation is
-#           that they are good for a minimum size, e.g. on TWEB it was 10M
+#        indicative price - a non-binding price provided by a provider to show current market levels, but the
+#           expectation is that they are good for a minimum size, e.g. 10M
 #        firm quote - a binding price provided by a provider in response to an RFQ
 #        composite price - an aggregation of indicative prices from multiple providers
 #
 # PROCESS:
-# 1) taker initiates an RFQ with the venue, stating which providers they's like to involve
+# 1) taker initiates an RFQ with the venue, stating which providers they want to show it to, the asset and size
 # 2) each provider gives a firm quote for the requested asset and size within a time limit
 # 3) takes either accepts the best quote or declines to trade
 # 4) venue informs providers of the outcome - traded, near miss, no trade
 #
 # In fitg the two parties are responsible for registering the trade with the GameMaster / Bookkeeper
 # Gamemaster acts as clearing house
+#
+# For the first implementation we will assume well coded agents that behave correctly
+# No error handling for invalid messages, bad behaviour etc.
+
+
 
 # Python imports
+from typing import Annotated, TypeAlias, Iterable, cast
 
 # vlmessaging imports
 from vlmessaging import VLM, Msg, Entry
@@ -35,9 +41,23 @@ from vlmessaging.utils import co, Missing, wip
 # local imports
 from fitg.agents._game_agent_base import GameAgent
 
+# types
+AssetName = str
+ProviderName = str
+Bid = Ask = float
+BidAsk: TypeAlias = Annotated[list[float | None], "BidAsk: [bid, ask]"]
+
+Indication: TypeAlias = tuple[AssetName, Bid | None, Ask | None]
+Indications: TypeAlias = Iterable[Indication]
+
+
+RFQ_TIMEOUT_MS = 5000                   # time allowed for providers to respond with quotes
+QUOTE_OBLIGATION_INTERVAL_MS = 10000    # interval within which providers must submit indicative prices
+
 
 class Rfq:
-    __slots__ = ['taker', 'takerId', 'venueId', 'asset', 'size', 'providers', 'status']
+    __slots__ = ['taker', 'takerId', 'venueId', 'asset', 'size', 'providers', 'startDT']
+
 
 
 class BondVenue(GameAgent):
@@ -47,7 +67,7 @@ class BondVenue(GameAgent):
     PROVIDER_JOINED = 'PROVIDER_JOINED'
     PROVIDER_LEFT = 'PROVIDER_LEFT'
     GET_PROVIDERS = 'GET_PROVIDERS'
-    REGISTER_TAKER = 'REGISTER_TAKER'   # takes are more secretive so no join / left protocol
+    REGISTER_TAKER = 'REGISTER_TAKER'   # takers are more secretive so no join / left protocol
     UNREGISTER_TAKER = 'UNREGISTER_TAKER'
     SUBMIT_INDIC = 'SUBMIT_INDIC'       # providers must submit indicative prices regularly
     GET_COMPOSITES = 'GET_COMPOSITES'   # anyone can get current indicative prices
@@ -60,8 +80,14 @@ class BondVenue(GameAgent):
     RFQ_NEAR_MISS = 'RFQ_NEAR_MISS'     # inform provider they were next best
     RFQ_NO_TRADE = 'RFQ_NO_TRADE'       # informs provider they didn't trade
 
+    _baByProviderByAsset: dict[AssetName, dict[ProviderName, BidAsk]]
+
     __slots__ = [
-        'addrByProviderName', 'addrByTakerName', 'assets', '_baByProviderByAsset', '_compositeByAsset'
+        'addrByProviderName',
+        'addrByTakerName',
+        'assets',
+        '_baByProviderByAsset',         # bid / ask by provider by asset
+        '_compositeByAsset',            # current composite indicative bid / ask by asset
     ]
 
     def __init__(self, router, *, assets, **kwargs):
@@ -91,29 +117,71 @@ class BondVenue(GameAgent):
         # PROVIDER PROTOCOL
 
         if msg.subject == self.REGISTER_PROVIDER:
-            self.addrByProviderName[msg.contents] = msg.sender.addr
-            # OPEN: inform other's that PROVIDER_JOINED
+            providerName = msg.contents     # assume valid
+            self.addrByProviderName[providerName] = msg.sender.addr
+            await self.conn.send(msg.reply(True))                       # inform provider of successful registration
+            for name, addr in self.addrByProviderName.items():
+                if name != providerName:
+                    await self.conn.send(Msg(addr, self.PROVIDER_JOINED, providerName))
+            for name, addr in self.addrByTakerName.items():
+                await self.conn.send(Msg(addr, self.PROVIDER_JOINED, providerName))
 
         elif msg.subject == self.UNREGISTER_PROVIDER:
-            self.addrByProviderName.pop(msg.contents)
-            # OPEN: inform other's that PROVIDER_LEFT
+            providerName = msg.contents     # assume valid
+            if self.addrByProviderName.pop(providerName, None):
+                await self.conn.send(msg.reply(None))                   # inform provider of successful unregistration
+                for addr in self.addrByProviderName.values():
+                    await self.conn.send(Msg(addr, self.PROVIDER_LEFT, providerName))
+                for addr in self.addrByTakerName.values():
+                    await self.conn.send(Msg(addr, self.PROVIDER_LEFT, providerName))
 
         elif msg.subject == self.GET_PROVIDERS:
-            return [VLM.HANDLE_DOES_NOT_UNDERSTAND]
+            await self.conn.send(msg.reply(list(self.addrByProviderName.keys())))
 
 
         # TAKER PROTOCOL
+
         elif msg.subject == self.REGISTER_TAKER:
-            self.addrByTakerName[msg.contents] = msg.sender.addr
+            takerName = msg.contents
+            self.addrByTakerName[takerName] = msg.sender.addr
+            await self.conn.send(msg.reply(True))
 
         elif msg.subject == self.UNREGISTER_TAKER:
-            self.addrByTakerName.pop(msg.contents)
+            takerName = msg.contents
+            self.addrByTakerName.pop(takerName, None)
+            await self.conn.send(msg.reply(None))
 
 
         # COMPOSITE PROTOCOL
 
         elif msg.subject == self.SUBMIT_INDIC:
-            return [VLM.HANDLE_DOES_NOT_UNDERSTAND]
+            addr = msg.sender.addr
+            providerName = next((n for n, a in self.addrByProviderName.items() if a == addr), None)  # OPEN: O(n) reverse lookup
+            if not providerName: return    # don't inform unknown providers of failure
+
+            touchedAssets = set()
+
+            for assetName, bid, ask in cast(Indications, msg.contents):
+                baByProviderName = self._baByProviderByAsset.get(assetName)
+                if baByProviderName is None:
+                    baByProviderName = self._baByProviderByAsset[assetName] = {}
+
+                baByProviderName[providerName] = [bid, ask]
+                touchedAssets.add(assetName)
+
+            for assetName in touchedAssets:
+                bids, asks = [], []
+                baByProviderName = self._baByProviderByAsset.get(assetName, {})
+                for ba in baByProviderName.values():
+                    bid, ask = ba
+                    if bid is not None:
+                        bids.append(bid)
+                    if ask is not None:
+                        asks.append(ask)
+
+                self._compositeByAsset[assetName] = [max(bids) if bids else None, min(asks) if asks else None]
+
+            await self.conn.send(msg.reply(True))
 
         elif msg.subject == self.GET_COMPOSITES:
             return [VLM.HANDLE_DOES_NOT_UNDERSTAND]
@@ -147,7 +215,6 @@ class BondVenue(GameAgent):
         elif msg.subject == self.RFQ_DECLINE:
             # inform all providers with RFQ_NO_TRADE
             return [VLM.HANDLE_DOES_NOT_UNDERSTAND]
-
 
 
         # GENERIC HANDLERS
