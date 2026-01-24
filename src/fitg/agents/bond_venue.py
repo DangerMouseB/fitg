@@ -28,6 +28,7 @@
 #
 # For the first implementation we will assume well coded agents that behave correctly
 # No error handling for invalid messages, bad behaviour etc.
+# Providers may only quote for RFQs they have provided indicative prices for
 
 
 
@@ -45,9 +46,8 @@ from fitg.agents._game_agent_base import GameAgent
 AssetName = str
 ProviderName = str
 Bid = Ask = float
-BidAsk: TypeAlias = Annotated[list[float | None], "BidAsk: [bid, ask]"]
-
-Indication: TypeAlias = tuple[AssetName, Bid | None, Ask | None]
+BidAsk: TypeAlias = Annotated[list[float], "BidAsk: [bid, ask]"]    # providers must provide a 2-way price so bid/ask are never None
+Indication: TypeAlias = tuple[AssetName, Bid, Ask]
 Indications: TypeAlias = Iterable[Indication]
 
 
@@ -80,15 +80,19 @@ class BondVenue(GameAgent):
     RFQ_NEAR_MISS = 'RFQ_NEAR_MISS'     # inform provider they were next best
     RFQ_NO_TRADE = 'RFQ_NO_TRADE'       # informs provider they didn't trade
 
-    _baByProviderByAsset: dict[AssetName, dict[ProviderName, BidAsk]]
+    _baByProviderByAsset: dict[AssetName, dict[ProviderName, Indication]]
+    _compositeByAsset: dict[AssetName, BidAsk]
 
     __slots__ = [
         'addrByProviderName',
         'addrByTakerName',
         'assets',
         '_baByProviderByAsset',         # bid / ask by provider by asset
-        '_compositeByAsset',            # current composite indicative bid / ask by asset
+        '_compositeByAsset',            # current composite indicative bid / ask (averaged across providers) by asset
     ]
+
+
+    # LIFECYCLE
 
     def __init__(self, router, *, assets, **kwargs):
         super().__init__(router, **kwargs)
@@ -109,12 +113,13 @@ class BondVenue(GameAgent):
         self.running = False
 
 
+    # MESSAGE HANDLERS
+
     async def msgArrived(self, msg):
 
         await super().msgArrived(msg)
 
-
-        # PROVIDER PROTOCOL
+        # LIFETIME PROTOCOL
 
         if msg.subject == self.REGISTER_PROVIDER:
             providerName = msg.contents     # assume valid
@@ -138,9 +143,6 @@ class BondVenue(GameAgent):
         elif msg.subject == self.GET_PROVIDERS:
             await self.conn.send(msg.reply(list(self.addrByProviderName.keys())))
 
-
-        # TAKER PROTOCOL
-
         elif msg.subject == self.REGISTER_TAKER:
             takerName = msg.contents
             self.addrByTakerName[takerName] = msg.sender.addr
@@ -159,32 +161,33 @@ class BondVenue(GameAgent):
             providerName = next((n for n, a in self.addrByProviderName.items() if a == addr), None)  # OPEN: O(n) reverse lookup
             if not providerName: return    # don't inform unknown providers of failure
 
-            touchedAssets = set()
+            changed = set()
 
+            # update provider quotes
             for assetName, bid, ask in cast(Indications, msg.contents):
                 baByProviderName = self._baByProviderByAsset.get(assetName)
                 if baByProviderName is None:
                     baByProviderName = self._baByProviderByAsset[assetName] = {}
-
                 baByProviderName[providerName] = [bid, ask]
-                touchedAssets.add(assetName)
+                changed.add(assetName)
 
-            for assetName in touchedAssets:
-                bids, asks = [], []
-                baByProviderName = self._baByProviderByAsset.get(assetName, {})
-                for ba in baByProviderName.values():
-                    bid, ask = ba
-                    if bid is not None:
-                        bids.append(bid)
-                    if ask is not None:
-                        asks.append(ask)
-
-                self._compositeByAsset[assetName] = [max(bids) if bids else None, min(asks) if asks else None]
+            # update composite quotes
+            for assetName in changed:
+                bidSum = askSum = 0.0
+                n = 0
+                for bid, ask in self._baByProviderByAsset.get(assetName, {}).values():
+                    bidSum += bid
+                    askSum += ask
+                    n += 1
+                if not n:
+                    self._compositeByAsset.pop(assetName, None)
+                else:
+                    self._compositeByAsset[assetName] = [bidSum / n, askSum / n]
 
             await self.conn.send(msg.reply(True))
 
         elif msg.subject == self.GET_COMPOSITES:
-            return [VLM.HANDLE_DOES_NOT_UNDERSTAND]
+            await self.conn.send(msg.reply(self._compositeByAsset))
 
 
         # RFQ PROTOCOL
@@ -217,14 +220,18 @@ class BondVenue(GameAgent):
             return [VLM.HANDLE_DOES_NOT_UNDERSTAND]
 
 
-        # GENERIC HANDLERS
+        # DEFAULT
 
-        return [VLM.IGNORE_UNHANDLED_REPLIES, VLM.HANDLE_DOES_NOT_UNDERSTAND]
+        else:
+            return [VLM.IGNORE_UNHANDLED_REPLIES, VLM.HANDLE_DOES_NOT_UNDERSTAND]
 
+
+    # RFQ HELPERS
 
     async def sendQuotesToTaker(self):
         # RFQ_QUOTES
         pass
+
 
     async def quoteAcceptanceTimeout(self):
         # if rfq is not done within time limit, inform providers and taker that

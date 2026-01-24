@@ -8,7 +8,7 @@ Casing Conventions:
 - constants - UPPER_SNAKE_CASE
 
 
-prinicples:
+principles:
 - prioritize readability
 - reduce phoneme / syllable count without sacrificing clarity
 
@@ -28,6 +28,34 @@ line spacing:
   - e.g. if isValid: return True
 - simple assigments can be placed on the same line to save vertical space
   - bids, asks = [], []
+- use 2 and 3 blank lines to demark major sections of code
+  - e.g. between class definitions
+  - e.g. between major sections of a long function
+- use a single blank line to separate minor sections of code
+  - e.g. between method definitions within a class
+  - e.g. between logical sections of code within a function
+- when using 2–3 blank lines for major sections, actively remove single blank lines that don't add structure
+  - avoid "floating" blank lines between a comment and the code it refers to
+  - avoid blank lines inside a tight if/elif protocol handler unless they separate phases (validate / update / reply)
+  - phase headers (e.g. "# update provider quotes") stick to surrounding code
+    - no blank line immediately before the phase header
+    - no blank line after a guard/setup line if the next line is the phase header
+- section titles (major headings like "# LIFECYCLE", "# MESSAGE HANDLERS")
+  - use 2 blank lines before the title
+  - use 1 blank line after the title
+  - use the title instead of extra single blank lines inside the section
+
+
+# human parsing (subjective, but keep the visual language consistent)
+- give blank lines a semantic meaning (like punctuation)
+  - 0 blank lines: same thought / same phase
+  - 1 blank line: minor topic shift within the same handler/function
+  - 2–3 blank lines: major boundary (new concept / new protocol section / new class)
+- one separator per boundary
+  - use either a header comment or a blank-line gap as the primary separator (not both)
+  - if you do use a header comment for a boundary, prefer removing adjacent single blank lines unless you are intentionally using 2–3 blank lines
+- in long protocol handlers (msgArrived), prefer a small number of repeated phases (guard/setup → update state → reply/broadcast)
+  - allow at most one blank line between phases; avoid blank lines inside a phase
 
 
 Naming Conventions:
@@ -90,5 +118,3 @@ Type hints:
 - after an API is established and stable, add type hints to the API surface
 - avoid excessive type hints on internal implementation details unless they materially improve clarity and maintainability
 - prefer descriptive names to excessive type hints
-
-
